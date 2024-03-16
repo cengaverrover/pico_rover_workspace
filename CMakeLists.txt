@@ -29,7 +29,7 @@ include(micro_ros.cmake)
 add_subdirectory(lib/pico_micro_ros_transport)
 add_subdirectory(lib/Encoder-Substep)
 add_subdirectory(lib/motor)
-add_subdirectory(lib/BNO055_driver)
+add_subdirectory(lib/bno055_lib/lib)
 
 #Add main source directory
 add_subdirectory(src)

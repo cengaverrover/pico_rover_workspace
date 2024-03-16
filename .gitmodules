@@ -6,3 +6,6 @@
 	path = lib/micro_ros_raspberrypi_pico_sdk
 	url = https://github.com/micro-ROS/micro_ros_raspberrypi_pico_sdk.git
 	branch = humble
+[submodule "lib/bno055_lib"]
+	path = lib/bno055_lib
+	url = https://github.com/alpertng02/pico-bno055.git
