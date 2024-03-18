@@ -37,8 +37,9 @@ extern "C" {
 #include "motor.hpp"
 
 rcl_subscription_t rover_movement_subscriber {};
-
 geometry_msgs__msg__Twist rover_speed_received {};
+
+rcl_publisher_t imu_publisher {};
 
 TaskHandle_t idle_led_task_handle {};
 TaskHandle_t micro_ros_task_handle {};
@@ -91,10 +92,10 @@ void idle_led_task(void* param) {
 
 void bno055_task(void* param) {
 
-	constexpr uint bno055_connection_retry_time { 2000 };
+	constexpr uint bno055_connection_retry_time { 500 };
 
 	taskENTER_CRITICAL();
-	rcl_publisher_t imu_publisher = *((rcl_publisher_t*) param);
+	rcl_publisher_t bno055_publisher = imu_publisher;
 	taskEXIT_CRITICAL();
 
 	// Try to connect to the bno055 sensor and in case of failure wait for the desired cooldown time and retry until success.
@@ -143,7 +144,7 @@ void bno055_task(void* param) {
 		};
 		xQueueOverwrite(bno055_data_queue, &eulerAngles);
 
-		auto ret = rcl_publish(&imu_publisher, &angle_msg, NULL);
+		auto ret = rcl_publish(&bno055_publisher, &angle_msg, NULL);
 
 		// Delay the task 10ms so that the data is read at 100Hz which is the maximum speed of bno055.
 		xTaskDelayUntil(&currentTickCount, 10 / portTICK_PERIOD_MS);
@@ -154,7 +155,7 @@ void bme280_task(void* param) {
 	vTaskDelete(NULL);
 }
 
-void i2c_setup(rcl_publisher_t * bno055_publisher) {
+void i2c_setup() {
 
 	constexpr uint i2c_sda { 0 };
 	constexpr uint i2c_scl { 1 };
@@ -170,7 +171,7 @@ void i2c_setup(rcl_publisher_t * bno055_publisher) {
 
 	// Create the i2c device tasks. They all need to run on the same core, 
 	// otherwise a mutex needs to be set to prevent 2 cores from accessing the same I2C line at the same time.
-	xTaskCreate(bno055_task, "bno055_task", configMINIMAL_STACK_SIZE * 4, bno055_publisher, configMAX_PRIORITIES - 2, &bno055_task_handle);
+	xTaskCreate(bno055_task, "bno055_task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 1, &bno055_task_handle);
 	vTaskCoreAffinitySet(bno055_task_handle, 0x01);
 
 	xTaskCreate(bme280_task, "bme280_task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 3, &bme280_task_handle);
@@ -204,7 +205,7 @@ void motor_task(void* param) {
 		RoverVelocity rover_vel {};
 		xQueuePeek(rover_movement_queue, &rover_vel, 0);
 
-		if (pos == front_left || back_left) {
+		if ((pos == front_left) || (pos == back_left)) {
 			rover_vel.angular_velocity *= -1;
 		}
 
@@ -222,7 +223,7 @@ void motor_task(void* param) {
 
 
 		// Publish the current velocity as microROS messeage.
-		motor_msg.data = current_speed;
+		motor_msg.data = motor_velocity;
 		auto ret = rcl_publish(&motor_publisher, &motor_msg, NULL);
 
 		// Delay the task for 10ms.
@@ -251,7 +252,6 @@ void micro_ros_task(void* param) {
 			publisher_names[i]);
 	}
 	// Create bno055 publisher that will send its absolute orientation data in euler angles.
-	rcl_publisher_t imu_publisher {};
 	rclc_publisher_init_best_effort(
 		&imu_publisher,
 		&node,
@@ -287,36 +287,40 @@ void micro_ros_task(void* param) {
 
 	vTaskSuspendAll();
 
-	i2c_setup(&imu_publisher);
+	i2c_setup();
 
 	pio_add_program(pio0, &quadrature_encoder_substep_program);
 
 	xTaskCreate(idle_led_task, "idle_led_task", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 4, &idle_led_task_handle);
 	vTaskCoreAffinitySet(idle_led_task_handle, 0x03);
 
-	xTaskCreate(motor_task<2, 3, 10, front_left>, "motor_front_left_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[0], configMAX_PRIORITIES - 1, &motor_task_handle[0]);
+	xTaskCreate(motor_task<2, 3, 10, front_left>, "motor_front_left_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[0], configMAX_PRIORITIES - 2, &motor_task_handle[0]);
 	vTaskCoreAffinitySet(motor_task_handle[0], 0x03);
 
-	xTaskCreate(motor_task<4, 5, 12, front_right>, "motor_front_right_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[1], configMAX_PRIORITIES - 1, &motor_task_handle[1]);
+	xTaskCreate(motor_task<4, 5, 12, front_right>, "motor_front_right_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[1], configMAX_PRIORITIES - 2, &motor_task_handle[1]);
 	vTaskCoreAffinitySet(motor_task_handle[1], 0x03);
 
-	xTaskCreate(motor_task<6, 7, 14, back_left>, "motor_back_left_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[2], configMAX_PRIORITIES - 1, &motor_task_handle[2]);
+	xTaskCreate(motor_task<6, 7, 14, back_left>, "motor_back_left_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[2], configMAX_PRIORITIES - 2, &motor_task_handle[2]);
 	vTaskCoreAffinitySet(motor_task_handle[2], 0x03);
 
-	xTaskCreate(motor_task<8, 9, 20, back_right>, "motor_back_right_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[3], configMAX_PRIORITIES - 1, &motor_task_handle[3]);
+	xTaskCreate(motor_task<8, 9, 20, back_right>, "motor_back_right_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[3], configMAX_PRIORITIES - 2, &motor_task_handle[3]);
 	vTaskCoreAffinitySet(motor_task_handle[3], 0x03);
 
 
 	xTaskResumeAll();
 
 	// Checks the microRTOS data transfer.
+	rclc_executor_spin_period(&executor, RCL_MS_TO_NS(10));
 	while (true) {
-		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
-		vTaskDelay(100 / portTICK_PERIOD_MS);
+		tight_loop_contents();
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
 	}
 }
 
 int main() {
+
+	// set_sys_clock_khz(270 * 1000, true);
+	// sleep_ms(100);
 
 	// Necessary boilerplate code for micro_ros connection.
 	rmw_uros_set_custom_transport(
