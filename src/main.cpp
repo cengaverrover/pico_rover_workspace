@@ -36,16 +36,17 @@ extern "C" {
 #include "encoder_substep.hpp"
 #include "motor.hpp"
 
-rcl_subscription_t rover_movement_subscriber {};
-geometry_msgs__msg__Twist rover_speed_received {};
+static rcl_subscription_t rover_movement_subscriber {};
+static geometry_msgs__msg__Twist rover_speed_received {};
 
-rcl_publisher_t imu_publisher {};
+static rcl_publisher_t motor_publishers[4] {};
+static rcl_publisher_t imu_publisher {};
 
-TaskHandle_t idle_led_task_handle {};
-TaskHandle_t micro_ros_task_handle {};
-TaskHandle_t motor_task_handle[4] {};
-TaskHandle_t bno055_task_handle {};
-TaskHandle_t bme280_task_handle {};
+static TaskHandle_t idle_led_task_handle {};
+static TaskHandle_t micro_ros_task_handle {};
+static TaskHandle_t motor_task_handle[4] {};
+static TaskHandle_t bno055_task_handle {};
+static TaskHandle_t bme280_task_handle {};
 
 static QueueHandle_t rover_movement_queue {};
 static QueueHandle_t bno055_data_queue {};
@@ -187,7 +188,7 @@ void motor_task(void* param) {
 
 	// Copy the publisher from the micro_ros_task in critical section so no race condition occurs.
 	taskENTER_CRITICAL();
-	rcl_publisher_t motor_publisher = *((rcl_publisher_t*) param);
+	rcl_publisher_t motor_publisher = motor_publishers[pos];
 	taskEXIT_CRITICAL();
 
 	// Create the motor class and set its speed to 0.
@@ -242,11 +243,10 @@ void micro_ros_task(void* param) {
 	rclc_node_init_default(&node, "pico_rover_node", "", &support);
 
 	// Create 4 motor speed publishers that will send their current speed as their messeage.
-	rcl_publisher_t motor_publisher[4] {};
 	const char* publisher_names[4] { "motor_front_left_msg", "motor_front_right_msg", "motor_back_left_msg", "motor_back_right_msg" };
 	for (int i = 0; i < 4; i++) {
 		rclc_publisher_init_best_effort(
-			&(motor_publisher[i]),
+			&(motor_publishers[i]),
 			&node,
 			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
 			publisher_names[i]);
@@ -294,16 +294,16 @@ void micro_ros_task(void* param) {
 	xTaskCreate(idle_led_task, "idle_led_task", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 4, &idle_led_task_handle);
 	vTaskCoreAffinitySet(idle_led_task_handle, 0x03);
 
-	xTaskCreate(motor_task<2, 3, 10, front_left>, "motor_front_left_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[0], configMAX_PRIORITIES - 2, &motor_task_handle[0]);
+	xTaskCreate(motor_task<2, 3, 10, front_left>, "motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[0]);
 	vTaskCoreAffinitySet(motor_task_handle[0], 0x03);
 
-	xTaskCreate(motor_task<4, 5, 12, front_right>, "motor_front_right_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[1], configMAX_PRIORITIES - 2, &motor_task_handle[1]);
+	xTaskCreate(motor_task<4, 5, 12, front_right>, "motor_front_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[1]);
 	vTaskCoreAffinitySet(motor_task_handle[1], 0x03);
 
-	xTaskCreate(motor_task<6, 7, 14, back_left>, "motor_back_left_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[2], configMAX_PRIORITIES - 2, &motor_task_handle[2]);
+	xTaskCreate(motor_task<6, 7, 14, back_left>, "motor_back_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[2]);
 	vTaskCoreAffinitySet(motor_task_handle[2], 0x03);
 
-	xTaskCreate(motor_task<8, 9, 20, back_right>, "motor_back_right_task", configMINIMAL_STACK_SIZE * 2, &motor_publisher[3], configMAX_PRIORITIES - 2, &motor_task_handle[3]);
+	xTaskCreate(motor_task<8, 9, 20, back_right>, "motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[3]);
 	vTaskCoreAffinitySet(motor_task_handle[3], 0x03);
 
 
@@ -335,8 +335,8 @@ int main() {
 	gpio_init(PICO_DEFAULT_LED_PIN);
 	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-	const int timeout_ms = 1000;
-	const uint8_t attempts = 120;
+	constexpr const int timeout_ms = 1000;
+	constexpr const uint8_t attempts = 120;
 	// Try to connect to ROS2 until success.
 	while (rmw_uros_ping_agent(timeout_ms, attempts) != RCL_RET_OK)
 	{
