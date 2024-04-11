@@ -310,9 +310,8 @@ void micro_ros_task(void* param) {
 	xTaskResumeAll();
 
 	// Checks the microRTOS data transfer.
-	rclc_executor_spin_period(&executor, RCL_MS_TO_NS(10));
 	while (true) {
-		tight_loop_contents();
+		rclc_executor_spin(&executor);
 		vTaskDelay(1000 / portTICK_PERIOD_MS);
 	}
 }
