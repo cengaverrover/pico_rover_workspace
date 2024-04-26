@@ -26,6 +26,7 @@ extern "C" {
 #include <rmw_microros/rmw_microros.h>
 
 #include <std_msgs/msg/float32.h>
+#include <std_msgs/msg/color_rgba.h>
 #include <geometry_msgs/msg/twist.h>
 #include <geometry_msgs/msg/vector3.h>
 #include "pico_uart_transports.h"
@@ -35,9 +36,13 @@ extern "C" {
 
 #include "encoder_substep.hpp"
 #include "motor.hpp"
+#include "ws2812.hpp"
 
 static rcl_subscription_t rover_movement_subscriber {};
 static geometry_msgs__msg__Twist rover_speed_received {};
+
+static rcl_subscription_t led_strip_subscriber {};
+static std_msgs__msg__ColorRGBA led_strip_msg_received {};
 
 static rcl_publisher_t motor_publishers[4] {};
 static rcl_publisher_t imu_publisher {};
@@ -47,9 +52,11 @@ static TaskHandle_t micro_ros_task_handle {};
 static TaskHandle_t motor_task_handle[4] {};
 static TaskHandle_t bno055_task_handle {};
 static TaskHandle_t bme280_task_handle {};
+static TaskHandle_t led_strip_task_handle {};
 
 static QueueHandle_t rover_movement_queue {};
 static QueueHandle_t bno055_data_queue {};
+static QueueHandle_t led_strip_queue {};
 
 
 enum MotorPos {
@@ -63,7 +70,9 @@ struct RoverVelocity {
 	float angular_velocity {};
 };
 
-void subscription_callback(const void* msgin) {
+#define CLAMP(x, upper, lower) (MIN(upper, MAX(x, lower)))
+
+void movement_subscription_callback(const void* msgin) {
 	// Receive the cmd_vel messeage from the subscription and send it to the freeRTOS queue.
 	const geometry_msgs__msg__Twist* msg = (const geometry_msgs__msg__Twist*) msgin;
 
@@ -74,11 +83,22 @@ void subscription_callback(const void* msgin) {
 	xQueueOverwrite(rover_movement_queue, &rover_vel);
 }
 
-void timer_callback(rcl_timer_t* timer, int64_t last_call_time) {
-	(void) last_call_time;
-	if (timer != NULL) {
+void led_strip_subscription_callback(const void* msgin) {
 
-	}
+	const std_msgs__msg__ColorRGBA* msg = (const std_msgs__msg__ColorRGBA*) msgin;
+
+	uint32_t rgb = WS2812::RGB(
+		static_cast<uint8_t>(CLAMP(msg->r, 0, 255)),
+		static_cast<uint8_t>(CLAMP(msg->g, 0, 255)),
+		static_cast<uint8_t>(CLAMP(msg->b, 0, 255))
+	);
+
+	xQueueOverwrite(led_strip_queue, &rgb);
+
+	BaseType_t xHigherPriorityTaskWoken {};
+	vTaskNotifyGiveFromISR(idle_led_task_handle, &xHigherPriorityTaskWoken);
+
+	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 void idle_led_task(void* param) {
@@ -89,6 +109,35 @@ void idle_led_task(void* param) {
 		gpio_put(PICO_DEFAULT_LED_PIN, 0);
 		vTaskDelay(1000 / portTICK_PERIOD_MS);
 	}
+}
+
+void led_strip_task(void* param) {
+
+	WS2812 ledStrip(
+        20,            // Data line is connected to pin 0. (GP0)
+        120,         		// Strip is 120 LEDs long.
+        pio1,               // Use PIO 0 for creating the state machine.
+        0,                  // Index of the state machine that will be created for controlling the LED strip
+                            // You can have 4 state machines per PIO-Block up to 8 overall.
+                            // See Chapter 3 in: https://datasheets.raspberrypi.org/rp2040/rp2040-datasheet.pdf
+        WS2812::FORMAT_GRB  // Pixel format used by the LED strip
+	);
+
+	uint32_t rgb = WS2812::RGB(255, 0, 0);
+	
+	ledStrip.fill(rgb);
+	ledStrip.show();
+
+	while (true) {
+		uint32_t ulNotifiedValue = ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(1000));
+
+		if (ulNotifiedValue > 0) {
+			xQueuePeek(led_strip_queue, &rgb, 0);
+			ledStrip.fill(rgb);
+			ledStrip.show();
+		} 	
+	}
+
 }
 
 void bno055_task(void* param) {
@@ -249,21 +298,32 @@ void micro_ros_task(void* param) {
 			&(motor_publishers[i]),
 			&node,
 			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-			publisher_names[i]);
+			publisher_names[i]
+		);
 	}
 	// Create bno055 publisher that will send its absolute orientation data in euler angles.
 	rclc_publisher_init_best_effort(
 		&imu_publisher,
 		&node,
 		ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Vector3),
-		"bno055_orientation_msg");
+		"bno055_orientation_msg"
+	);
 
 	// Create the subscriber that will get data from cmd_vel topic.
 	rclc_subscription_init_default(
 		&rover_movement_subscriber,
 		&node,
 		ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-		"cmd_vel");
+		"cmd_vel"
+	);
+
+	// Create the subscriber that will get rgb data for led strip.
+	rclc_subscription_init_default(
+		&led_strip_subscriber,
+		&node,
+		ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, ColorRGBA),
+		"led_strip_rgba"
+	);
 
 	// rcl_timer_t timer;
 	// constexpr unsigned int timer_timeout = 1000;
@@ -276,12 +336,14 @@ void micro_ros_task(void* param) {
 
 	// Create the executor struct that will handle the actual microROS execution.
 	rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
-	rclc_executor_init(&executor, &support.context, 6, &allocator);
+	rclc_executor_init(&executor, &support.context, 7, &allocator);
 	// rclc_executor_add_timer(&executor, &timer);
-	rclc_executor_add_subscription(&executor, &rover_movement_subscriber, &rover_speed_received, subscription_callback, ON_NEW_DATA);
+	rclc_executor_add_subscription(&executor, &rover_movement_subscriber, &rover_speed_received, movement_subscription_callback, ON_NEW_DATA);
+	rclc_executor_add_subscription(&executor, &led_strip_subscriber, &led_strip_msg_received, led_strip_subscription_callback, ON_NEW_DATA);
 
 	// Create the freeRTOS queue that will deliver the subcription messeage to the motor tasks in a thread safe way. 
 	rover_movement_queue = xQueueCreate(1, sizeof(RoverVelocity));
+	led_strip_queue = xQueueCreate(1, sizeof(uint32_t));
 
 	// Suspends the freeRTOS scheduler so that the all newly created tasks can start at the same time.
 
@@ -293,6 +355,9 @@ void micro_ros_task(void* param) {
 
 	xTaskCreate(idle_led_task, "idle_led_task", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 4, &idle_led_task_handle);
 	vTaskCoreAffinitySet(idle_led_task_handle, 0x03);
+
+	xTaskCreate(led_strip_task, "led_strip_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 4, &led_strip_task_handle);
+	vTaskCoreAffinitySet(led_strip_task_handle, 0x03);
 
 	xTaskCreate(motor_task<2, 3, 10, front_left>, "motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[0]);
 	vTaskCoreAffinitySet(motor_task_handle[0], 0x03);

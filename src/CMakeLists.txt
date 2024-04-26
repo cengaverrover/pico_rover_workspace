@@ -11,6 +11,7 @@ target_link_libraries(${NAME}
      pico_motor
      pico_encoder_substep
      pico_bno055
+     pico-ws2812
 )
 	
 target_include_directories(${NAME} PRIVATE

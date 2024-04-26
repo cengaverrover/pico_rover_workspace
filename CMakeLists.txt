@@ -30,6 +30,7 @@ add_subdirectory(lib/pico_micro_ros_transport)
 add_subdirectory(lib/Encoder-Substep)
 add_subdirectory(lib/motor)
 add_subdirectory(lib/bno055_lib/lib)
+add_subdirectory(lib/ws2812)
 
 #Add main source directory
 add_subdirectory(src)
