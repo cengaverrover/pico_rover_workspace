@@ -93,11 +93,8 @@ void led_strip_subscription_callback(const void* msgin) {
 		static_cast<uint8_t>(CLAMP(msg->b, 0, 255))
 	);
 
-	xQueueOverwrite(led_strip_queue, &rgb);
-
 	BaseType_t xHigherPriorityTaskWoken {};
-	vTaskNotifyGiveFromISR(idle_led_task_handle, &xHigherPriorityTaskWoken);
-
+	xQueueOverwriteFromISR(led_strip_queue, &rgb, &xHigherPriorityTaskWoken);
 	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
@@ -114,7 +111,7 @@ void idle_led_task(void* param) {
 void led_strip_task(void* param) {
 
 	WS2812 ledStrip(
-        20,            // Data line is connected to pin 0. (GP0)
+        19,            // Data line is connected to pin 0. (GP0)
         120,         		// Strip is 120 LEDs long.
         pio1,               // Use PIO 0 for creating the state machine.
         0,                  // Index of the state machine that will be created for controlling the LED strip
@@ -123,26 +120,24 @@ void led_strip_task(void* param) {
         WS2812::FORMAT_GRB  // Pixel format used by the LED strip
 	);
 
-	uint32_t rgb = WS2812::RGB(255, 0, 0);
+	uint32_t rgb = WS2812::RGB(0, 0, 255);
 	
 	ledStrip.fill(rgb);
 	ledStrip.show();
 
 	while (true) {
-		uint32_t ulNotifiedValue = ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(1000));
+		xQueueReceive(led_strip_queue, &rgb, portMAX_DELAY);
 
-		if (ulNotifiedValue > 0) {
-			xQueuePeek(led_strip_queue, &rgb, 0);
-			ledStrip.fill(rgb);
-			ledStrip.show();
-		} 	
+		ledStrip.fill(rgb);
+		ledStrip.show();
+
 	}
 
 }
 
 void bno055_task(void* param) {
 
-	constexpr uint bno055_connection_retry_time { 500 };
+	constexpr uint bno055_connection_retry_time { 1000 };
 
 	taskENTER_CRITICAL();
 	rcl_publisher_t bno055_publisher = imu_publisher;
@@ -166,9 +161,6 @@ void bno055_task(void* param) {
 		vTaskDelay(bno055_connection_retry_time / portTICK_PERIOD_MS);
 	}
 	sleep_ms(50);
-
-	// Creat the queue that will send the orientation data to the other tasks.
-	bno055_data_queue = xQueueCreate(1, sizeof(bno055_euler_float_t));
 
 	auto currentTickCount = xTaskGetTickCount();
 	while (true) {
@@ -221,7 +213,7 @@ void i2c_setup() {
 
 	// Create the i2c device tasks. They all need to run on the same core, 
 	// otherwise a mutex needs to be set to prevent 2 cores from accessing the same I2C line at the same time.
-	xTaskCreate(bno055_task, "bno055_task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 1, &bno055_task_handle);
+	xTaskCreate(bno055_task, "bno055_task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 2, &bno055_task_handle);
 	vTaskCoreAffinitySet(bno055_task_handle, 0x01);
 
 	xTaskCreate(bme280_task, "bme280_task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 3, &bme280_task_handle);
@@ -244,6 +236,7 @@ void motor_task(void* param) {
 	Motor motor(pwmPinL, pwmPinR);
 	motor.setSpeedPercent(0.0f);
 
+	RoverVelocity rover_vel {};
 	// Create the microROS messeage to be sent as current velocity.
 	std_msgs__msg__Float32 motor_msg {
 		.data = 0.0f
@@ -252,8 +245,7 @@ void motor_task(void* param) {
 	auto currentTickCount = xTaskGetTickCount();
 	while (true) {
 		// Get the linear and angular velocity from the queue.
-		RoverVelocity rover_vel {};
-		xQueuePeek(rover_movement_queue, &rover_vel, 0);
+		xQueueReceive(rover_movement_queue, &rover_vel, 0);
 
 		if ((pos == front_left) || (pos == back_left)) {
 			rover_vel.angular_velocity *= -1;
@@ -270,7 +262,6 @@ void motor_task(void* param) {
 			motor_velocity = -100.0f;
 
 		motor.setSpeedPercent(motor_velocity);
-
 
 		// Publish the current velocity as microROS messeage.
 		motor_msg.data = motor_velocity;
@@ -344,7 +335,8 @@ void micro_ros_task(void* param) {
 	// Create the freeRTOS queue that will deliver the subcription messeage to the motor tasks in a thread safe way. 
 	rover_movement_queue = xQueueCreate(1, sizeof(RoverVelocity));
 	led_strip_queue = xQueueCreate(1, sizeof(uint32_t));
-
+	bno055_data_queue = xQueueCreate(1, sizeof(bno055_euler_float_t));
+	
 	// Suspends the freeRTOS scheduler so that the all newly created tasks can start at the same time.
 
 	vTaskSuspendAll();
@@ -359,16 +351,16 @@ void micro_ros_task(void* param) {
 	xTaskCreate(led_strip_task, "led_strip_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 4, &led_strip_task_handle);
 	vTaskCoreAffinitySet(led_strip_task_handle, 0x03);
 
-	xTaskCreate(motor_task<2, 3, 10, front_left>, "motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[0]);
+	xTaskCreate(motor_task<2, 3, 10, front_left>, "motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[0]);
 	vTaskCoreAffinitySet(motor_task_handle[0], 0x03);
 
-	xTaskCreate(motor_task<4, 5, 12, front_right>, "motor_front_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[1]);
+	xTaskCreate(motor_task<4, 5, 12, front_right>, "motor_front_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[1]);
 	vTaskCoreAffinitySet(motor_task_handle[1], 0x03);
 
-	xTaskCreate(motor_task<6, 7, 14, back_left>, "motor_back_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[2]);
+	xTaskCreate(motor_task<6, 7, 14, back_left>, "motor_back_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[2]);
 	vTaskCoreAffinitySet(motor_task_handle[2], 0x03);
 
-	xTaskCreate(motor_task<8, 9, 20, back_right>, "motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[3]);
+	xTaskCreate(motor_task<8, 9, 20, back_right>, "motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[3]);
 	vTaskCoreAffinitySet(motor_task_handle[3], 0x03);
 
 
