@@ -38,6 +38,16 @@ extern "C" {
 #include "motor.hpp"
 #include "ws2812.hpp"
 
+static WS2812 ledStrip(
+	19,            // Data line is connected to pin 0. (GP0)
+	120,         		// Strip is 120 LEDs long.
+	pio1,               // Use PIO 0 for creating the state machine.
+	0,                  // Index of the state machine that will be created for controlling the LED strip
+	// You can have 4 state machines per PIO-Block up to 8 overall.
+	// See Chapter 3 in: https://datasheets.raspberrypi.org/rp2040/rp2040-datasheet.pdf
+	WS2812::FORMAT_GRB  // Pixel format used by the LED strip
+);
+
 static rcl_subscription_t rover_movement_subscriber {};
 static geometry_msgs__msg__Twist rover_speed_received {};
 
@@ -56,7 +66,7 @@ static TaskHandle_t led_strip_task_handle {};
 
 static QueueHandle_t rover_movement_queue {};
 static QueueHandle_t bno055_data_queue {};
-static QueueHandle_t led_strip_queue {};
+// static QueueHandle_t led_strip_queue {};
 
 
 enum MotorPos {
@@ -80,10 +90,17 @@ void movement_subscription_callback(const void* msgin) {
 		.linear_velocity = static_cast<float>(msg->linear.x),
 		.angular_velocity = static_cast<float>(msg->angular.z)
 	};
+	BaseType_t xHigherPriorityTaskWoken {};
+	constexpr uint32_t led_pin_mask { 0x01 << PICO_DEFAULT_LED_PIN };
+	gpio_xor_mask(led_pin_mask);
+
+	BaseType_t taskwoken {};
 	xQueueOverwrite(rover_movement_queue, &rover_vel);
+	// portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 void led_strip_subscription_callback(const void* msgin) {
+
 
 	const std_msgs__msg__ColorRGBA* msg = (const std_msgs__msg__ColorRGBA*) msgin;
 
@@ -93,45 +110,8 @@ void led_strip_subscription_callback(const void* msgin) {
 		static_cast<uint8_t>(CLAMP(msg->b, 0, 255))
 	);
 
-	BaseType_t xHigherPriorityTaskWoken {};
-	xQueueOverwriteFromISR(led_strip_queue, &rgb, &xHigherPriorityTaskWoken);
-	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-}
-
-void idle_led_task(void* param) {
-	// Blink the led every second so that any freezes in the program can be detected if the led stops working.
-	while (true) {
-		gpio_put(PICO_DEFAULT_LED_PIN, 1);
-		vTaskDelay(1000 / portTICK_PERIOD_MS);
-		gpio_put(PICO_DEFAULT_LED_PIN, 0);
-		vTaskDelay(1000 / portTICK_PERIOD_MS);
-	}
-}
-
-void led_strip_task(void* param) {
-
-	WS2812 ledStrip(
-        19,            // Data line is connected to pin 0. (GP0)
-        120,         		// Strip is 120 LEDs long.
-        pio1,               // Use PIO 0 for creating the state machine.
-        0,                  // Index of the state machine that will be created for controlling the LED strip
-                            // You can have 4 state machines per PIO-Block up to 8 overall.
-                            // See Chapter 3 in: https://datasheets.raspberrypi.org/rp2040/rp2040-datasheet.pdf
-        WS2812::FORMAT_GRB  // Pixel format used by the LED strip
-	);
-
-	uint32_t rgb = WS2812::RGB(0, 0, 255);
-	
 	ledStrip.fill(rgb);
 	ledStrip.show();
-
-	while (true) {
-		xQueueReceive(led_strip_queue, &rgb, portMAX_DELAY);
-
-		ledStrip.fill(rgb);
-		ledStrip.show();
-
-	}
 
 }
 
@@ -226,12 +206,7 @@ void motor_task(void* param) {
 
 	// Create the encoder object.
 	EncoderSubstep encoder(pio0, (pwmPinL / 2) - 1, encA);
-
-	// Copy the publisher from the micro_ros_task in critical section so no race condition occurs.
-	taskENTER_CRITICAL();
-	rcl_publisher_t motor_publisher = motor_publishers[pos];
-	taskEXIT_CRITICAL();
-
+	
 	// Create the motor class and set its speed to 0.
 	Motor motor(pwmPinL, pwmPinR);
 	motor.setSpeedPercent(0.0f);
@@ -245,14 +220,14 @@ void motor_task(void* param) {
 	auto currentTickCount = xTaskGetTickCount();
 	while (true) {
 		// Get the linear and angular velocity from the queue.
-		xQueueReceive(rover_movement_queue, &rover_vel, 0);
+		xQueuePeek(rover_movement_queue, &rover_vel, 0);
 
 		if ((pos == front_left) || (pos == back_left)) {
 			rover_vel.angular_velocity *= -1;
 		}
 
 		// Read the current speed from the encoder in encoder counts * 1000 and publish it as messeage.
-		const float current_speed { static_cast<float>(encoder.getSpeed()) / 1000.0f };
+		const float current_speed { static_cast<float>(encoder.getSpeed()) / 4000.0f };
 
 		// Calculate the desired motor velocity
 		float motor_velocity { rover_vel.linear_velocity + rover_vel.angular_velocity };
@@ -265,7 +240,7 @@ void motor_task(void* param) {
 
 		// Publish the current velocity as microROS messeage.
 		motor_msg.data = motor_velocity;
-		auto ret = rcl_publish(&motor_publisher, &motor_msg, NULL);
+		auto ret = rcl_publish(&motor_publishers[pos], &motor_msg, NULL);
 
 		// Delay the task for 10ms.
 		xTaskDelayUntil(&currentTickCount, 10 / portTICK_PERIOD_MS);
@@ -334,9 +309,9 @@ void micro_ros_task(void* param) {
 
 	// Create the freeRTOS queue that will deliver the subcription messeage to the motor tasks in a thread safe way. 
 	rover_movement_queue = xQueueCreate(1, sizeof(RoverVelocity));
-	led_strip_queue = xQueueCreate(1, sizeof(uint32_t));
+	// led_strip_queue = xQueueCreate(1, sizeof(uint32_t));
 	bno055_data_queue = xQueueCreate(1, sizeof(bno055_euler_float_t));
-	
+
 	// Suspends the freeRTOS scheduler so that the all newly created tasks can start at the same time.
 
 	vTaskSuspendAll();
@@ -344,12 +319,6 @@ void micro_ros_task(void* param) {
 	i2c_setup();
 
 	pio_add_program(pio0, &quadrature_encoder_substep_program);
-
-	xTaskCreate(idle_led_task, "idle_led_task", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 4, &idle_led_task_handle);
-	vTaskCoreAffinitySet(idle_led_task_handle, 0x03);
-
-	xTaskCreate(led_strip_task, "led_strip_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 4, &led_strip_task_handle);
-	vTaskCoreAffinitySet(led_strip_task_handle, 0x03);
 
 	xTaskCreate(motor_task<2, 3, 10, front_left>, "motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[0]);
 	vTaskCoreAffinitySet(motor_task_handle[0], 0x03);
@@ -364,12 +333,16 @@ void micro_ros_task(void* param) {
 	vTaskCoreAffinitySet(motor_task_handle[3], 0x03);
 
 
+	ledStrip.fill(WS2812::RGB(0, 255, 0));
+	ledStrip.show();
+
+	
 	xTaskResumeAll();
 
 	// Checks the microRTOS data transfer.
 	while (true) {
 		rclc_executor_spin(&executor);
-		vTaskDelay(1000 / portTICK_PERIOD_MS);
+		vTaskDelay(500 / portTICK_PERIOD_MS);
 	}
 }
 
