@@ -62,7 +62,9 @@ void PwmController::setNs(const uint32_t nanos) const {
     uint16_t chanLevel { static_cast<uint16_t>((nanos * mWrap) / periodNs) };
     /* Check if the needed channel level is within the accepted range. */
     pwm_set_chan_level(pwm_gpio_to_slice_num(mPwmPin), mPwmPin % 2, chanLevel);
+    #ifndef NDEBUG
     printf("Debug Messeage => Pwm %u Set with chanLevel: %u and nanos: %u\n", mPwmPin, chanLevel, nanos);
+    #endif
 }
 
 Motor::Motor(const uint pwmPinL, const uint pwmPinR) :
