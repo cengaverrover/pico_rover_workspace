@@ -39,7 +39,7 @@ extern "C" {
 #include "ws2812.hpp"
 
 static WS2812 ledStrip(
-	19,            // Data line is connected to pin 0. (GP0)
+	LED_STRIP_PIN,            // Data line is connected to pin 0. (GP0)
 	120,         		// Strip is 120 LEDs long.
 	pio1,               // Use PIO 0 for creating the state machine.
 	0,                  // Index of the state machine that will be created for controlling the LED strip
@@ -66,8 +66,6 @@ static TaskHandle_t led_strip_task_handle {};
 
 static QueueHandle_t rover_movement_queue {};
 static QueueHandle_t bno055_data_queue {};
-// static QueueHandle_t led_strip_queue {};
-
 
 enum MotorPos {
 	front_left = 0,
@@ -80,7 +78,7 @@ struct RoverVelocity {
 	float angular_velocity {};
 };
 
-#define CLAMP(x, upper, lower) (MIN(upper, MAX(x, lower)))
+#define CLAMP(x, upper, lower) (MIN((upper), MAX((x), (lower))))
 
 void movement_subscription_callback(const void* msgin) {
 	// Receive the cmd_vel messeage from the subscription and send it to the freeRTOS queue.
@@ -91,8 +89,7 @@ void movement_subscription_callback(const void* msgin) {
 		.angular_velocity = static_cast<float>(msg->angular.z)
 	};
 	BaseType_t xHigherPriorityTaskWoken {};
-	constexpr uint32_t led_pin_mask { 0x01 << PICO_DEFAULT_LED_PIN };
-	gpio_xor_mask(led_pin_mask);
+	gpio_xor_mask(0x01 << PICO_DEFAULT_LED_PIN);
 
 	BaseType_t taskwoken {};
 	xQueueOverwrite(rover_movement_queue, &rover_vel);
@@ -179,16 +176,13 @@ void bme280_task(void* param) {
 
 void i2c_setup() {
 
-	constexpr uint i2c_sda { 0 };
-	constexpr uint i2c_scl { 1 };
-
 	// Configure the i2c pins.
-	gpio_init(i2c_sda);
-	gpio_init(i2c_scl);
-	gpio_set_function(i2c_sda, GPIO_FUNC_I2C);
-	gpio_set_function(i2c_scl, GPIO_FUNC_I2C);
-	gpio_pull_up(i2c_sda);
-	gpio_pull_up(i2c_scl);
+	gpio_init(I2C_SDA_PIN);
+	gpio_init(I2C_SDA_PIN);
+	gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
+	gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
+	gpio_pull_up(I2C_SDA_PIN);
+	gpio_pull_up(I2C_SDA_PIN);
 	i2c_init(i2c_default, 400 * 1000);
 
 	// Create the i2c device tasks. They all need to run on the same core, 
@@ -204,8 +198,19 @@ void i2c_setup() {
 template<uint pwmPinL, uint pwmPinR, uint encA, MotorPos pos>
 void motor_task(void* param) {
 
+	constexpr int timeout_for_turnoff_ms { 1000 };
+	constexpr int gear_ratio = 99;
+	constexpr int encoder_count_per_rev = 16;
+
+	constexpr float encoder_speed_multiplier { 4.0f / (1000 * gear_ratio * encoder_count_per_rev) };
+
+	int differential_turn_mutliplier { 1 };
+	if ((pos == front_left) || (pos == back_left)) {
+		differential_turn_mutliplier = -1;
+	}
+
 	// Create the encoder object.
-	EncoderSubstep encoder(pio0, (pwmPinL / 2) - 1, encA);
+	EncoderSubstep encoder(pio0, pos, encA);
 	
 	// Create the motor class and set its speed to 0.
 	Motor motor(pwmPinL, pwmPinR);
@@ -222,25 +227,17 @@ void motor_task(void* param) {
 		// Get the linear and angular velocity from the queue.
 		xQueuePeek(rover_movement_queue, &rover_vel, 0);
 
-		if ((pos == front_left) || (pos == back_left)) {
-			rover_vel.angular_velocity *= -1;
-		}
-
 		// Read the current speed from the encoder in encoder counts * 1000 and publish it as messeage.
-		const float current_speed { static_cast<float>(encoder.getSpeed()) / 4000.0f };
+		const float current_speed { static_cast<float>(encoder.getSpeed()) * encoder_speed_multiplier };
 
 		// Calculate the desired motor velocity
-		float motor_velocity { rover_vel.linear_velocity + rover_vel.angular_velocity };
-		if (motor_velocity >= 100.0f)
-			motor_velocity = 100.0f;
-		else if (motor_velocity <= -100.0f)
-			motor_velocity = -100.0f;
-
+		const float motor_velocity = CLAMP( (rover_vel.linear_velocity + rover_vel.angular_velocity * differential_turn_mutliplier), 100.0f, -100.0f);
+		
 		motor.setSpeedPercent(motor_velocity);
 
 		// Publish the current velocity as microROS messeage.
 		motor_msg.data = motor_velocity;
-		auto ret = rcl_publish(&motor_publishers[pos], &motor_msg, NULL);
+		const auto ret = rcl_publish(&motor_publishers[pos], &motor_msg, NULL);
 
 		// Delay the task for 10ms.
 		xTaskDelayUntil(&currentTickCount, 10 / portTICK_PERIOD_MS);
@@ -309,7 +306,6 @@ void micro_ros_task(void* param) {
 
 	// Create the freeRTOS queue that will deliver the subcription messeage to the motor tasks in a thread safe way. 
 	rover_movement_queue = xQueueCreate(1, sizeof(RoverVelocity));
-	// led_strip_queue = xQueueCreate(1, sizeof(uint32_t));
 	bno055_data_queue = xQueueCreate(1, sizeof(bno055_euler_float_t));
 
 	// Suspends the freeRTOS scheduler so that the all newly created tasks can start at the same time.
@@ -320,16 +316,20 @@ void micro_ros_task(void* param) {
 
 	pio_add_program(pio0, &quadrature_encoder_substep_program);
 
-	xTaskCreate(motor_task<2, 3, 10, front_left>, "motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[0]);
+	xTaskCreate(motor_task<FRONT_LEFT_LPWM, FRONT_LEFT_RPWM, FRONT_LEFT_ENCODER_A, front_left>,
+		"motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[0]);
 	vTaskCoreAffinitySet(motor_task_handle[0], 0x03);
 
-	xTaskCreate(motor_task<4, 5, 12, front_right>, "motor_front_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[1]);
+	xTaskCreate(motor_task<FRONT_RIGHT_LPWM, FRONT_RIGHT_RPWM, FRONT_RIGHT_ENCODER_A, front_right>,
+		"motor_front_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[1]);
 	vTaskCoreAffinitySet(motor_task_handle[1], 0x03);
 
-	xTaskCreate(motor_task<6, 7, 14, back_left>, "motor_back_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[2]);
+	xTaskCreate(motor_task<BACK_LEFT_LPWM, BACK_RIGHT_RPWM, BACK_LEFT_ENCODER_A, back_left>,
+		"motor_back_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[2]);
 	vTaskCoreAffinitySet(motor_task_handle[2], 0x03);
 
-	xTaskCreate(motor_task<8, 9, 20, back_right>, "motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[3]);
+	xTaskCreate(motor_task<BACK_RIGHT_LPWM, BACK_RIGHT_RPWM, BACK_RIGHT_ENCODER_A, back_right>,
+		"motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[3]);
 	vTaskCoreAffinitySet(motor_task_handle[3], 0x03);
 
 
