@@ -38,15 +38,6 @@ extern "C" {
 #include "motor.hpp"
 #include "ws2812.hpp"
 
-static WS2812 ledStrip(
-	LED_STRIP_PIN,            // Data line is connected to pin 0. (GP0)
-	120,         		// Strip is 120 LEDs long.
-	pio1,               // Use PIO 0 for creating the state machine.
-	0,                  // Index of the state machine that will be created for controlling the LED strip
-	// You can have 4 state machines per PIO-Block up to 8 overall.
-	// See Chapter 3 in: https://datasheets.raspberrypi.org/rp2040/rp2040-datasheet.pdf
-	WS2812::FORMAT_GRB  // Pixel format used by the LED strip
-);
 
 static rcl_subscription_t rover_movement_subscriber {};
 static geometry_msgs__msg__Twist rover_speed_received {};
@@ -66,6 +57,7 @@ static TaskHandle_t led_strip_task_handle {};
 
 static QueueHandle_t rover_movement_queue {};
 static QueueHandle_t bno055_data_queue {};
+static QueueHandle_t led_strip_queue {};
 
 enum MotorPos {
 	front_left = 0,
@@ -102,13 +94,45 @@ void led_strip_subscription_callback(const void* msgin) {
 	const std_msgs__msg__ColorRGBA* msg = (const std_msgs__msg__ColorRGBA*) msgin;
 
 	uint32_t rgb = WS2812::RGB(
-		static_cast<uint8_t>(CLAMP(msg->r, 0, 255)),
-		static_cast<uint8_t>(CLAMP(msg->g, 0, 255)),
-		static_cast<uint8_t>(CLAMP(msg->b, 0, 255))
+		static_cast<uint8_t>(CLAMP(msg->r, 255, 0)),
+		static_cast<uint8_t>(CLAMP(msg->g, 255, 0)),
+		static_cast<uint8_t>(CLAMP(msg->b, 255, 0))
 	);
 
+	BaseType_t task_woken {};
+	xQueueSendFromISR(led_strip_queue, &rgb, &task_woken);
+	portYIELD_FROM_ISR(task_woken);
+}
+
+void led_strip_task(void* param) {
+	WS2812 ledStrip(
+		LED_STRIP_PIN,            // Data line is connected to pin 0. (GP0)
+		120,         		// Strip is 120 LEDs long.
+		pio1,               // Use PIO 0 for creating the state machine.
+		0,                  // Index of the state machine that will be created for controlling the LED strip
+		// You can have 4 state machines per PIO-Block up to 8 overall.
+		// See Chapter 3 in: https://datasheets.raspberrypi.org/rp2040/rp2040-datasheet.pdf
+		WS2812::FORMAT_GRB  // Pixel format used by the LED strip
+
+	);
+
+
+	uint32_t rgb = WS2812::RGB(0, 255, 0);
+	taskENTER_CRITICAL();
 	ledStrip.fill(rgb);
 	ledStrip.show();
+	taskEXIT_CRITICAL();
+
+	while (true) {
+		xQueueReceive(led_strip_queue, &rgb, portMAX_DELAY);
+
+		taskENTER_CRITICAL();
+		ledStrip.fill(rgb);
+		ledStrip.show();
+		taskEXIT_CRITICAL();
+	}
+
+
 
 }
 
@@ -211,7 +235,7 @@ void motor_task(void* param) {
 
 	// Create the encoder object.
 	EncoderSubstep encoder(pio0, pos, encA);
-	
+
 	// Create the motor class and set its speed to 0.
 	Motor motor(pwmPinL, pwmPinR);
 	motor.setSpeedPercent(0.0f);
@@ -231,8 +255,8 @@ void motor_task(void* param) {
 		const float current_speed { static_cast<float>(encoder.getSpeed()) * encoder_speed_multiplier };
 
 		// Calculate the desired motor velocity
-		const float motor_velocity = CLAMP( (rover_vel.linear_velocity + rover_vel.angular_velocity * differential_turn_mutliplier), 100.0f, -100.0f);
-		
+		const float motor_velocity = CLAMP((rover_vel.linear_velocity + rover_vel.angular_velocity * differential_turn_mutliplier), 80.0f, -80.0f);
+
 		motor.setSpeedPercent(motor_velocity);
 
 		// Publish the current velocity as microROS messeage.
@@ -307,6 +331,7 @@ void micro_ros_task(void* param) {
 	// Create the freeRTOS queue that will deliver the subcription messeage to the motor tasks in a thread safe way. 
 	rover_movement_queue = xQueueCreate(1, sizeof(RoverVelocity));
 	bno055_data_queue = xQueueCreate(1, sizeof(bno055_euler_float_t));
+	led_strip_queue = xQueueCreate(1, sizeof(uint32_t));
 
 	// Suspends the freeRTOS scheduler so that the all newly created tasks can start at the same time.
 
@@ -332,11 +357,9 @@ void micro_ros_task(void* param) {
 		"motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[3]);
 	vTaskCoreAffinitySet(motor_task_handle[3], 0x03);
 
+	xTaskCreate(led_strip_task, "led_strip_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 3, &led_strip_task_handle);
+	vTaskCoreAffinitySet(led_strip_task_handle, 0x03);
 
-	ledStrip.fill(WS2812::RGB(0, 255, 0));
-	ledStrip.show();
-
-	
 	xTaskResumeAll();
 
 	// Checks the microRTOS data transfer.
