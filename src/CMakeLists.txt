@@ -25,26 +25,28 @@ target_compile_definitions(${NAME} PRIVATE
 )
 
 # Configure pin connections
-target_compile_definitions(${NAME} PRIVATE FRONT_LEFT_LPWM=2)
-target_compile_definitions(${NAME} PRIVATE FRONT_LEFT_RPWM=3)
-target_compile_definitions(${NAME} PRIVATE FRONT_LEFT_ENCODER_A=10)
+target_compile_definitions(${NAME} PRIVATE 
+    FRONT_LEFT_LPWM=2
+    PRIVATE FRONT_LEFT_RPWM=3
+    PRIVATE FRONT_LEFT_ENCODER_A=10
 
-target_compile_definitions(${NAME} PRIVATE FRONT_RIGHT_LPWM=4)
-target_compile_definitions(${NAME} PRIVATE FRONT_RIGHT_RPWM=5)
-target_compile_definitions(${NAME} PRIVATE FRONT_RIGHT_ENCODER_A=12)
+    PRIVATE FRONT_RIGHT_LPWM=4
+    PRIVATE FRONT_RIGHT_RPWM=5
+    PRIVATE FRONT_RIGHT_ENCODER_A=12
 
-target_compile_definitions(${NAME} PRIVATE BACK_LEFT_LPWM=6)
-target_compile_definitions(${NAME} PRIVATE BACK_LEFT_RPWM=7)
-target_compile_definitions(${NAME} PRIVATE BACK_LEFT_ENCODER_A=14)
+    PRIVATE BACK_LEFT_LPWM=6
+    PRIVATE BACK_LEFT_RPWM=7
+    PRIVATE BACK_LEFT_ENCODER_A=14
 
-target_compile_definitions(${NAME} PRIVATE BACK_RIGHT_LPWM=8)
-target_compile_definitions(${NAME} PRIVATE BACK_RIGHT_RPWM=9)
-target_compile_definitions(${NAME} PRIVATE BACK_RIGHT_ENCODER_A=20)
+    PRIVATE BACK_RIGHT_LPWM=8
+    PRIVATE BACK_RIGHT_RPWM=9
+    PRIVATE BACK_RIGHT_ENCODER_A=20
 
-target_compile_definitions(${NAME} PRIVATE I2C_SDA_PIN=0)
-target_compile_definitions(${NAME} PRIVATE I2C_SCL_PIN=1)
+    PRIVATE I2C_SDA_PIN=0
+    PRIVATE I2C_SCL_PIN=1
 
-target_compile_definitions(${NAME} PRIVATE LED_STRIP_PIN=19)
+    PRIVATE LED_STRIP_PIN=19
+)
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(${NAME})

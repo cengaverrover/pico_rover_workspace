@@ -5,21 +5,21 @@
 #include <stdio.h>
 #endif
 
-WS2812::WS2812(uint pin, uint length, PIO pio, uint sm)  {
+WS2812::WS2812(uint pin, uint length, PIO pio, uint sm) {
     initialize(pin, length, pio, sm, NONE, GREEN, RED, BLUE);
 }
 
 WS2812::WS2812(uint pin, uint length, PIO pio, uint sm, DataFormat format) {
     switch (format) {
-        case FORMAT_RGB:
-            initialize(pin, length, pio, sm, NONE, RED, GREEN, BLUE);
-            break;
-        case FORMAT_GRB:
-            initialize(pin, length, pio, sm, NONE, GREEN, RED, BLUE);
-            break;
-        case FORMAT_WRGB:
-            initialize(pin, length, pio, sm, WHITE, RED, GREEN, BLUE);
-            break;
+    case FORMAT_RGB:
+        initialize(pin, length, pio, sm, NONE, RED, GREEN, BLUE);
+        break;
+    case FORMAT_GRB:
+        initialize(pin, length, pio, sm, NONE, GREEN, RED, BLUE);
+        break;
+    case FORMAT_WRGB:
+        initialize(pin, length, pio, sm, WHITE, RED, GREEN, BLUE);
+        break;
     }
 }
 
@@ -31,8 +31,17 @@ WS2812::WS2812(uint pin, uint length, PIO pio, uint sm, DataByte b1, DataByte b2
     initialize(pin, length, pio, sm, b1, b2, b3, b4);
 }
 
+
+WS2812::WS2812(WS2812&& ws2812) : pin(ws2812.pin), length(ws2812.length), pio(ws2812.pio), sm(ws2812.sm) {
+    for (int i = 0; i < 4; i++) {
+        bytes[i] = ws2812.bytes[i];
+    }
+
+    data = ws2812.data;
+}
+
 WS2812::~WS2812() {
-    
+
 }
 
 void WS2812::initialize(uint pin, uint length, PIO pio, uint sm, DataByte b1, DataByte b2, DataByte b3, DataByte b4) {
@@ -47,9 +56,9 @@ void WS2812::initialize(uint pin, uint length, PIO pio, uint sm, DataByte b1, Da
     this->bytes[3] = b4;
     uint offset = pio_add_program(pio, &ws2812_program);
     uint bits = (b1 == NONE ? 24 : 32);
-    #ifdef DEBUG
+#ifdef DEBUG
     printf("WS2812 / Initializing SM %u with offset %X at pin %u and %u data bits...\n", sm, offset, pin, bits);
-    #endif
+#endif
     ws2812_program_init(pio, sm, offset, pin, 800000, bits);
 }
 
@@ -57,18 +66,18 @@ uint32_t WS2812::convertData(uint32_t rgbw) {
     uint32_t result = 0;
     for (uint b = 0; b < 4; b++) {
         switch (bytes[b]) {
-            case RED:
-                result |= (rgbw & 0xFF);
-                break;
-            case GREEN:
-                result |= (rgbw & 0xFF00) >> 8;
-                break;
-            case BLUE:
-                result |= (rgbw & 0xFF0000) >> 16;
-                break;
-            case WHITE:
-                result |= (rgbw & 0xFF000000) >> 24;
-                break;
+        case RED:
+            result |= (rgbw & 0xFF);
+            break;
+        case GREEN:
+            result |= (rgbw & 0xFF00) >> 8;
+            break;
+        case BLUE:
+            result |= (rgbw & 0xFF0000) >> 16;
+            break;
+        case WHITE:
+            result |= (rgbw & 0xFF000000) >> 24;
+            break;
         }
         result <<= 8;
     }
@@ -94,7 +103,7 @@ void WS2812::fill(uint32_t color) {
 }
 
 void WS2812::fill(uint32_t color, uint first) {
-    fill(color, first, length-first);
+    fill(color, first, length - first);
 }
 
 void WS2812::fill(uint32_t color, uint first, uint count) {
@@ -109,11 +118,11 @@ void WS2812::fill(uint32_t color, uint first, uint count) {
 }
 
 void WS2812::show() {
-    #ifdef DEBUG
+#ifdef DEBUG
     for (uint i = 0; i < length; i++) {
         printf("WS2812 / Put data: %08X\n", data[i]);
     }
-    #endif
+#endif
     for (uint i = 0; i < length; i++) {
         pio_sm_put_blocking(pio, sm, data[i]);
     }

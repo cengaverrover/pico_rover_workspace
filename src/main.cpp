@@ -105,30 +105,25 @@ void led_strip_subscription_callback(const void* msgin) {
 }
 
 void led_strip_task(void* param) {
-	WS2812 ledStrip(
-		LED_STRIP_PIN,            // Data line is connected to pin 0. (GP0)
-		120,         		// Strip is 120 LEDs long.
-		pio1,               // Use PIO 0 for creating the state machine.
-		0,                  // Index of the state machine that will be created for controlling the LED strip
-		// You can have 4 state machines per PIO-Block up to 8 overall.
-		// See Chapter 3 in: https://datasheets.raspberrypi.org/rp2040/rp2040-datasheet.pdf
-		WS2812::FORMAT_GRB  // Pixel format used by the LED strip
 
-	);
+	constexpr int led_size = 119;
 
+	WS2812 led_strip(LED_STRIP_PIN, led_size, pio1, 0, WS2812::FORMAT_GRB);
 
 	uint32_t rgb = WS2812::RGB(0, 255, 0);
 	taskENTER_CRITICAL();
-	ledStrip.fill(rgb);
-	ledStrip.show();
+	for (int i = 0; i < led_size; i++) {
+		led_strip.setPixelColor(i, rgb);
+		led_strip.show();
+	}
 	taskEXIT_CRITICAL();
 
 	while (true) {
 		xQueueReceive(led_strip_queue, &rgb, portMAX_DELAY);
 
 		taskENTER_CRITICAL();
-		ledStrip.fill(rgb);
-		ledStrip.show();
+		led_strip.fill(rgb);
+		led_strip.show();
 		taskEXIT_CRITICAL();
 	}
 
@@ -260,11 +255,11 @@ void motor_task(void* param) {
 		motor.setSpeedPercent(motor_velocity);
 
 		// Publish the current velocity as microROS messeage.
-		motor_msg.data = motor_velocity;
+		motor_msg.data = current_speed;
 		const auto ret = rcl_publish(&motor_publishers[pos], &motor_msg, NULL);
 
-		// Delay the task for 10ms.
-		xTaskDelayUntil(&currentTickCount, 10 / portTICK_PERIOD_MS);
+		// Delay the task.
+		xTaskDelayUntil(&currentTickCount, 8 / portTICK_PERIOD_MS);
 	}
 }
 
@@ -364,12 +359,16 @@ void micro_ros_task(void* param) {
 
 	// Checks the microRTOS data transfer.
 	while (true) {
-		rclc_executor_spin(&executor);
-		vTaskDelay(500 / portTICK_PERIOD_MS);
+		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+		vTaskDelay(100 / portTICK_PERIOD_MS);
 	}
 }
 
 int main() {
+
+	WS2812 led_strip(LED_STRIP_PIN, 119, pio1, 0, WS2812::FORMAT_GRB);
+	led_strip.fill(WS2812::RGB(255, 0, 0));
+	led_strip.show();
 
 	// set_sys_clock_khz(270 * 1000, true);
 	// sleep_ms(100);
