@@ -55,7 +55,7 @@ static TaskHandle_t bno055_task_handle {};
 static TaskHandle_t bme280_task_handle {};
 static TaskHandle_t led_strip_task_handle {};
 
-static QueueHandle_t rover_movement_queue {};
+static QueueHandle_t motor_speed_queues[4] {};
 static QueueHandle_t bno055_data_queue {};
 static QueueHandle_t led_strip_queue {};
 
@@ -65,10 +65,6 @@ enum MotorPos {
 	back_left = 2,
 	back_right = 3,
 };
-struct RoverVelocity {
-	float linear_velocity {};
-	float angular_velocity {};
-};
 
 #define CLAMP(x, upper, lower) (MIN((upper), MAX((x), (lower))))
 
@@ -76,16 +72,17 @@ void movement_subscription_callback(const void* msgin) {
 	// Receive the cmd_vel messeage from the subscription and send it to the freeRTOS queue.
 	const geometry_msgs__msg__Twist* msg = (const geometry_msgs__msg__Twist*) msgin;
 
-	RoverVelocity rover_vel {
-		.linear_velocity = static_cast<float>(msg->linear.x),
-		.angular_velocity = static_cast<float>(msg->angular.z)
-	};
-	BaseType_t xHigherPriorityTaskWoken {};
+	const float motor_left_speed = CLAMP(static_cast<float>(msg->linear.x) - static_cast<float>(msg->angular.z), 80.0f, -80.0f);
+	const float motor_right_speed = CLAMP(static_cast<float>(msg->linear.x) + static_cast<float>(msg->angular.z), 80.0f, -80.0f);
+
 	gpio_xor_mask(0x01 << PICO_DEFAULT_LED_PIN);
 
 	BaseType_t taskwoken {};
-	xQueueOverwrite(rover_movement_queue, &rover_vel);
-	// portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+	xQueueOverwrite(motor_speed_queues[0], &motor_left_speed);
+	xQueueOverwrite(motor_speed_queues[2], &motor_left_speed);
+
+	xQueueOverwrite(motor_speed_queues[1], &motor_right_speed);
+	xQueueOverwrite(motor_speed_queues[3], &motor_right_speed);
 }
 
 void led_strip_subscription_callback(const void* msgin) {
@@ -100,8 +97,7 @@ void led_strip_subscription_callback(const void* msgin) {
 	);
 
 	BaseType_t task_woken {};
-	xQueueSendFromISR(led_strip_queue, &rgb, &task_woken);
-	portYIELD_FROM_ISR(task_woken);
+	xQueueSend(led_strip_queue, &rgb, 0);
 }
 
 void led_strip_task(void* param) {
@@ -221,12 +217,7 @@ void motor_task(void* param) {
 	constexpr int gear_ratio = 99;
 	constexpr int encoder_count_per_rev = 16;
 
-	constexpr float encoder_speed_multiplier { 4.0f / (1000 * gear_ratio * encoder_count_per_rev) };
-
-	int differential_turn_mutliplier { 1 };
-	if ((pos == front_left) || (pos == back_left)) {
-		differential_turn_mutliplier = -1;
-	}
+	constexpr float encoder_speed_multiplier { 4.0f / (1000 * encoder_count_per_rev) };
 
 	// Create the encoder object.
 	EncoderSubstep encoder(pio0, pos, encA);
@@ -235,27 +226,34 @@ void motor_task(void* param) {
 	Motor motor(pwmPinL, pwmPinR);
 	motor.setSpeedPercent(0.0f);
 
-	RoverVelocity rover_vel {};
 	// Create the microROS messeage to be sent as current velocity.
 	std_msgs__msg__Float32 motor_msg {
 		.data = 0.0f
 	};
 
+	float speed_received {};
+	float motor_speed {};
+	auto last_messeage_time = get_absolute_time();
 	auto currentTickCount = xTaskGetTickCount();
 	while (true) {
 		// Get the linear and angular velocity from the queue.
-		xQueuePeek(rover_movement_queue, &rover_vel, 0);
+		if (xQueueReceive(motor_speed_queues[pos], &speed_received, 0) == pdTRUE) {
+			last_messeage_time = get_absolute_time();
+		}
+		auto current_time = get_absolute_time();
+		auto deltaT = absolute_time_diff_us(last_messeage_time, current_time);
+		if (deltaT >= timeout_for_turnoff_ms * 1000) {
+			motor_speed = 0;
+		} else {
+			motor_speed = speed_received;
+		}
 
-		// Read the current speed from the encoder in encoder counts * 1000 and publish it as messeage.
-		const float current_speed { static_cast<float>(encoder.getSpeed()) * encoder_speed_multiplier };
-
-		// Calculate the desired motor velocity
-		const float motor_velocity = CLAMP((rover_vel.linear_velocity + rover_vel.angular_velocity * differential_turn_mutliplier), 80.0f, -80.0f);
-
-		motor.setSpeedPercent(motor_velocity);
+		// Read the current speed from the encoder.
+		const float current_rpm { static_cast<float>(encoder.getSpeed()) * encoder_speed_multiplier * 60 };
+		motor.setSpeedPercent(motor_speed);
 
 		// Publish the current velocity as microROS messeage.
-		motor_msg.data = current_speed;
+		motor_msg.data = current_rpm;
 		const auto ret = rcl_publish(&motor_publishers[pos], &motor_msg, NULL);
 
 		// Delay the task.
@@ -324,9 +322,11 @@ void micro_ros_task(void* param) {
 	rclc_executor_add_subscription(&executor, &led_strip_subscriber, &led_strip_msg_received, led_strip_subscription_callback, ON_NEW_DATA);
 
 	// Create the freeRTOS queue that will deliver the subcription messeage to the motor tasks in a thread safe way. 
-	rover_movement_queue = xQueueCreate(1, sizeof(RoverVelocity));
 	bno055_data_queue = xQueueCreate(1, sizeof(bno055_euler_float_t));
 	led_strip_queue = xQueueCreate(1, sizeof(uint32_t));
+	for (int i = 0; i < 4; i++) {
+		motor_speed_queues[i] = xQueueCreate(1, sizeof(float));
+	}
 
 	// Suspends the freeRTOS scheduler so that the all newly created tasks can start at the same time.
 
