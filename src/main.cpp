@@ -210,6 +210,8 @@ void i2c_setup() {
 
 }
 
+// #define MOTOR_PID_CONTROL
+
 template<uint pwmPinL, uint pwmPinR, uint encA, MotorPos pos>
 void motor_task(void* param) {
 
@@ -231,33 +233,58 @@ void motor_task(void* param) {
 		.data = 0.0f
 	};
 
-	float speed_received {};
+#ifdef MOTOR_PID_CONTROL
+	constexpr int max_rpm { 20000 };
+	constexpr int max_duty_cycle { 80.0f };
+
+	constexpr float Kp { static_cast<float>(max_rpm) / max_duty_cycle};
+	constexpr float Ki {};
+	constexpr float Kd{};
+	float integral {};
+	constexpr float integral_boundary {};
+	float prev_error {};
+#endif
+
+	float target_speed {};
 	float motor_speed {};
 	auto last_messeage_time = get_absolute_time();
 	auto currentTickCount = xTaskGetTickCount();
 	while (true) {
 		// Get the linear and angular velocity from the queue.
-		if (xQueueReceive(motor_speed_queues[pos], &speed_received, 0) == pdTRUE) {
+		if (xQueueReceive(motor_speed_queues[pos], &target_speed, 0) == pdTRUE) {
 			last_messeage_time = get_absolute_time();
 		}
 		auto current_time = get_absolute_time();
 		auto deltaT = absolute_time_diff_us(last_messeage_time, current_time);
 		if (deltaT >= timeout_for_turnoff_ms * 1000) {
-			motor_speed = 0;
-		} else {
-			motor_speed = speed_received;
-		}
+			target_speed = 0;
+		} 
 
 		// Read the current speed from the encoder.
 		const float current_rpm { static_cast<float>(encoder.getSpeed()) * encoder_speed_multiplier * 60 };
-		motor.setSpeedPercent(motor_speed);
+#ifdef MOTOR_PID_CONTROL
+		const float error { target_speed - current_rpm };
+
+		const float proportional = Kp * error;
+
+		integral += error * Ki;
+		integral = CLAMP(integral, integral_boundary, -integral_boundary);
+
+		const float derivative = Kd * (error - prev_error) / (deltaT / 1000);
+
+		motor_speed = CLAMP(proportional + integral + derivative, max_duty_cycle, -max_duty_cycle);
+#else
+		motor_speed = target_speed;
+#endif
+		
+		motor.setSpeedPercent(target_speed);
 
 		// Publish the current velocity as microROS messeage.
 		motor_msg.data = current_rpm;
 		const auto ret = rcl_publish(&motor_publishers[pos], &motor_msg, NULL);
 
 		// Delay the task.
-		xTaskDelayUntil(&currentTickCount, 8 / portTICK_PERIOD_MS);
+		xTaskDelayUntil(&currentTickCount, 5 / portTICK_PERIOD_MS);
 	}
 }
 
