@@ -38,10 +38,11 @@ WS2812::WS2812(WS2812&& ws2812) : pin(ws2812.pin), length(ws2812.length), pio(ws
     }
 
     data = ws2812.data;
+    ws2812.data = nullptr;
 }
 
 WS2812::~WS2812() {
-
+    delete[] data;
 }
 
 void WS2812::initialize(uint pin, uint length, PIO pio, uint sm, DataByte b1, DataByte b2, DataByte b3, DataByte b4) {

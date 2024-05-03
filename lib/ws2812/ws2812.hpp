@@ -25,6 +25,8 @@ class WS2812 {
         WS2812(uint pin, uint length, PIO pio, uint sm, DataByte b1, DataByte b2, DataByte b3);
         WS2812(uint pin, uint length, PIO pio, uint sm, DataByte b1, DataByte b2, DataByte b3, DataByte b4);
 
+        WS2812(WS2812& ws2812) = delete;
+        
         WS2812(WS2812&& ws2812);
 
         ~WS2812();
