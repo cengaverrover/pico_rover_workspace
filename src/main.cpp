@@ -113,14 +113,7 @@ void led_strip_task(void* param) {
 
 	WS2812 led_strip(std::move(led_strip_g));
 
-	uint32_t rgb = WS2812::RGB(0, 255, 0);
-	taskENTER_CRITICAL();
-	for (int i = 0; i < led_size; i++) {
-		led_strip.setPixelColor(i, rgb);
-		led_strip.show();
-		sleep_ms(10);
-	}
-	taskEXIT_CRITICAL();
+	uint32_t rgb = WS2812::RGB(0, 255, 0); 
 
 	while (true) {
 		xQueueReceive(led_strip_queue, &rgb, portMAX_DELAY);
@@ -433,6 +426,12 @@ int main() {
 	gpio_put(PICO_DEFAULT_LED_PIN, 1);
 	sleep_ms(100);
 
+	for (int i = 0; i < LED_STRIP_SIZE; i++) {
+		led_strip_g.setPixelColor(i, WS2812::RGB(0, 255, 0));
+		led_strip_g.show();
+		sleep_ms(10);
+	}
+	
 	// Create the micro_ros task will create all the topics and other tasks.
 	xTaskCreate(micro_ros_task, "micro_ros_task", configMINIMAL_STACK_SIZE * 4,
 		NULL, 1, &micro_ros_task_handle);
