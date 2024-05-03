@@ -72,17 +72,21 @@ void movement_subscription_callback(const void* msgin) {
 	// Receive the cmd_vel messeage from the subscription and send it to the freeRTOS queue.
 	const geometry_msgs__msg__Twist* msg = (const geometry_msgs__msg__Twist*) msgin;
 
-	const float motor_left_speed = CLAMP(static_cast<float>(msg->linear.x) - static_cast<float>(msg->angular.z), 80.0f, -80.0f);
-	const float motor_right_speed = CLAMP(static_cast<float>(msg->linear.x) + static_cast<float>(msg->angular.z), 80.0f, -80.0f);
+#ifdef MOTOR_PID_CONTROL
+	const float motor_left_speed = CLAMP(static_cast<float>(msg->linear.x) - static_cast<float>(msg->angular.z), MOTOR_MAX_RPM, -MOTOR_MAX_RPM);
+	const float motor_right_speed = CLAMP(static_cast<float>(msg->linear.x) + static_cast<float>(msg->angular.z), MOTOR_MAX_RPM, -MOTOR_MAX_RPM);
+#else
+	const float motor_left_speed = CLAMP(static_cast<float>(msg->linear.x) - static_cast<float>(msg->angular.z), PWM_MAX_DUTY_CYCLE, -PWM_MAX_DUTY_CYCLE);
+	const float motor_right_speed = CLAMP(static_cast<float>(msg->linear.x) + static_cast<float>(msg->angular.z), PWM_MAX_DUTY_CYCLE, -PWM_MAX_DUTY_CYCLE);
+#endif	
 
 	gpio_xor_mask(0x01 << PICO_DEFAULT_LED_PIN);
 
-	BaseType_t taskwoken {};
-	xQueueOverwrite(motor_speed_queues[0], &motor_left_speed);
-	xQueueOverwrite(motor_speed_queues[2], &motor_left_speed);
+	xQueueOverwrite(motor_speed_queues[front_left], &motor_left_speed);
+	xQueueOverwrite(motor_speed_queues[back_left], &motor_left_speed);
 
-	xQueueOverwrite(motor_speed_queues[1], &motor_right_speed);
-	xQueueOverwrite(motor_speed_queues[3], &motor_right_speed);
+	xQueueOverwrite(motor_speed_queues[front_right], &motor_right_speed);
+	xQueueOverwrite(motor_speed_queues[back_right], &motor_right_speed);
 }
 
 void led_strip_subscription_callback(const void* msgin) {
@@ -96,13 +100,12 @@ void led_strip_subscription_callback(const void* msgin) {
 		static_cast<uint8_t>(CLAMP(msg->b, 255, 0))
 	);
 
-	BaseType_t task_woken {};
-	xQueueSend(led_strip_queue, &rgb, 0);
+	xQueueOverwrite(led_strip_queue, &rgb);
 }
 
 void led_strip_task(void* param) {
 
-	constexpr int led_size = 119;
+	constexpr int led_size = LED_STRIP_SIZE;
 
 	WS2812 led_strip(LED_STRIP_PIN, led_size, pio1, 0, WS2812::FORMAT_GRB);
 
@@ -111,6 +114,7 @@ void led_strip_task(void* param) {
 	for (int i = 0; i < led_size; i++) {
 		led_strip.setPixelColor(i, rgb);
 		led_strip.show();
+		sleep_ms(10);
 	}
 	taskEXIT_CRITICAL();
 
@@ -202,11 +206,13 @@ void i2c_setup() {
 
 	// Create the i2c device tasks. They all need to run on the same core, 
 	// otherwise a mutex needs to be set to prevent 2 cores from accessing the same I2C line at the same time.
-	xTaskCreate(bno055_task, "bno055_task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 2, &bno055_task_handle);
-	vTaskCoreAffinitySet(bno055_task_handle, 0x01);
+	xTaskCreate(bno055_task, "bno055_task", configMINIMAL_STACK_SIZE * 4,
+		NULL, configMAX_PRIORITIES - 2, &bno055_task_handle);
+	vTaskCoreAffinitySet(bno055_task_handle, ON_CORE_ZERO);
 
-	xTaskCreate(bme280_task, "bme280_task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 3, &bme280_task_handle);
-	vTaskCoreAffinitySet(bme280_task_handle, 0x01);
+	xTaskCreate(bme280_task, "bme280_task", configMINIMAL_STACK_SIZE * 4,
+		NULL, configMAX_PRIORITIES - 3, &bme280_task_handle);
+	vTaskCoreAffinitySet(bme280_task_handle, ON_CORE_ZERO);
 
 }
 
@@ -215,11 +221,11 @@ void i2c_setup() {
 template<uint pwmPinL, uint pwmPinR, uint encA, MotorPos pos>
 void motor_task(void* param) {
 
-	constexpr int timeout_for_turnoff_ms { 1000 };
+	constexpr int timeout_for_turnoff_ms { 1250 };
 	constexpr int gear_ratio = 99;
-	constexpr int encoder_count_per_rev = 16;
 
-	constexpr float encoder_speed_multiplier { 4.0f / (1000 * encoder_count_per_rev) };
+	// Convert encoder speed to revolutions per second
+	constexpr float encoder_speed_multiplier { 4.0f / (1000 * ENCODER_PULSE_PER_REV) };
 
 	// Create the encoder object.
 	EncoderSubstep encoder(pio0, pos, encA);
@@ -234,12 +240,10 @@ void motor_task(void* param) {
 	};
 
 #ifdef MOTOR_PID_CONTROL
-	constexpr int max_rpm { 20000 };
-	constexpr int max_duty_cycle { 80.0f };
 
-	constexpr float Kp { static_cast<float>(max_rpm) / max_duty_cycle};
-	constexpr float Ki {};
-	constexpr float Kd{};
+	constexpr float Kp { static_cast<float>(PWM_MAX_DUTY_CYCLE) / MOTOR_MAX_RPM };
+	constexpr float Ki { Kp / 10.0f };
+	constexpr float Kd { Kp / 50.0f };
 	float integral {};
 	constexpr float integral_boundary {};
 	float prev_error {};
@@ -247,6 +251,7 @@ void motor_task(void* param) {
 
 	float target_speed {};
 	float motor_speed {};
+	auto prev_time = get_absolute_time();
 	auto last_messeage_time = get_absolute_time();
 	auto currentTickCount = xTaskGetTickCount();
 	while (true) {
@@ -254,29 +259,33 @@ void motor_task(void* param) {
 		if (xQueueReceive(motor_speed_queues[pos], &target_speed, 0) == pdTRUE) {
 			last_messeage_time = get_absolute_time();
 		}
+		const float current_rpm { static_cast<float>(encoder.getSpeed()) * encoder_speed_multiplier * 60 };
+
 		auto current_time = get_absolute_time();
-		auto deltaT = absolute_time_diff_us(last_messeage_time, current_time);
-		if (deltaT >= timeout_for_turnoff_ms * 1000) {
-			target_speed = 0;
-		} 
+		if (absolute_time_diff_us(last_messeage_time, current_time) >= timeout_for_turnoff_ms * 1000) {
+			motor_speed = 0;
+		} else {
+#ifdef MOTOR_PID_CONTROL
+			const float error { target_speed - current_rpm };
+
+			const float proportional = Kp * error;
+
+			integral = CLAMP(integral + error * Ki, integral_boundary, -integral_boundary);
+
+			auto deltaT = absolute_time_diff_us(prev_time, current_time);
+			const float derivative = Kd * (error - prev_error) / (deltaT / 1000);
+
+			prev_error = error;
+			prev_time = current_time;
+
+			motor_speed = CLAMP(proportional + integral + derivative, PWM_MAX_DUTY_CYCLE, -PWM_MAX_DUTY_CYCLE);
+#else
+			motor_speed = target_speed;
+#endif
+		}
 
 		// Read the current speed from the encoder.
-		const float current_rpm { static_cast<float>(encoder.getSpeed()) * encoder_speed_multiplier * 60 };
-#ifdef MOTOR_PID_CONTROL
-		const float error { target_speed - current_rpm };
 
-		const float proportional = Kp * error;
-
-		integral += error * Ki;
-		integral = CLAMP(integral, integral_boundary, -integral_boundary);
-
-		const float derivative = Kd * (error - prev_error) / (deltaT / 1000);
-
-		motor_speed = CLAMP(proportional + integral + derivative, max_duty_cycle, -max_duty_cycle);
-#else
-		motor_speed = target_speed;
-#endif
-		
 		motor.setSpeedPercent(target_speed);
 
 		// Publish the current velocity as microROS messeage.
@@ -365,22 +374,22 @@ void micro_ros_task(void* param) {
 
 	xTaskCreate(motor_task<FRONT_LEFT_LPWM, FRONT_LEFT_RPWM, FRONT_LEFT_ENCODER_A, front_left>,
 		"motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[0]);
-	vTaskCoreAffinitySet(motor_task_handle[0], 0x03);
+	vTaskCoreAffinitySet(motor_task_handle[0], ON_BOTH_CORES);
 
 	xTaskCreate(motor_task<FRONT_RIGHT_LPWM, FRONT_RIGHT_RPWM, FRONT_RIGHT_ENCODER_A, front_right>,
 		"motor_front_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[1]);
-	vTaskCoreAffinitySet(motor_task_handle[1], 0x03);
+	vTaskCoreAffinitySet(motor_task_handle[1], ON_BOTH_CORES);
 
 	xTaskCreate(motor_task<BACK_LEFT_LPWM, BACK_RIGHT_RPWM, BACK_LEFT_ENCODER_A, back_left>,
 		"motor_back_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[2]);
-	vTaskCoreAffinitySet(motor_task_handle[2], 0x03);
+	vTaskCoreAffinitySet(motor_task_handle[2], ON_BOTH_CORES);
 
 	xTaskCreate(motor_task<BACK_RIGHT_LPWM, BACK_RIGHT_RPWM, BACK_RIGHT_ENCODER_A, back_right>,
 		"motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[3]);
-	vTaskCoreAffinitySet(motor_task_handle[3], 0x03);
+	vTaskCoreAffinitySet(motor_task_handle[3], ON_BOTH_CORES);
 
 	xTaskCreate(led_strip_task, "led_strip_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 3, &led_strip_task_handle);
-	vTaskCoreAffinitySet(led_strip_task_handle, 0x03);
+	vTaskCoreAffinitySet(led_strip_task_handle, ON_BOTH_CORES);
 
 	xTaskResumeAll();
 
@@ -393,7 +402,7 @@ void micro_ros_task(void* param) {
 
 int main() {
 
-	WS2812 led_strip(LED_STRIP_PIN, 119, pio1, 0, WS2812::FORMAT_GRB);
+	WS2812 led_strip(LED_STRIP_PIN, LED_STRIP_SIZE, pio1, 0, WS2812::FORMAT_GRB);
 	led_strip.fill(WS2812::RGB(255, 0, 0));
 	led_strip.show();
 
@@ -426,7 +435,7 @@ int main() {
 
 	// Create the micro_ros task will create all the topics and other tasks.
 	xTaskCreate(micro_ros_task, "micro_ros_task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES, &micro_ros_task_handle);
-	vTaskCoreAffinitySet(micro_ros_task_handle, 0x03);
+	vTaskCoreAffinitySet(micro_ros_task_handle, ON_BOTH_CORES);
 
 	// Start the freeRTOS scheduler. The code should never reach the while loop.
 	vTaskStartScheduler();

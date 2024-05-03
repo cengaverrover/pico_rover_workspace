@@ -24,6 +24,20 @@ target_compile_definitions(${NAME} PRIVATE
     portSUPPORT_SMP=1
 )
 
+target_compile_definitions(${NAME} PRIVATE
+    ON_BOTH_CORES=0x03
+    ON_CORE_ZERO=0x01
+    ON_CORE_ONE=0x02
+)
+
+target_compile_definitions(${NAME} PRIVATE
+    PWM_MAX_DUTY_CYCLE=80.0f
+    MOTOR_MAX_RPM=20000
+    ENCODER_PULSE_PER_REV=16
+
+    LED_STRIP_SIZE=119
+)
+
 # Configure pin connections
 target_compile_definitions(${NAME} PRIVATE 
     FRONT_LEFT_LPWM=2
