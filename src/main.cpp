@@ -18,7 +18,6 @@ extern "C" {
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-#include "semphr.h"
 
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
@@ -243,6 +242,10 @@ void motor_task(void* param) {
 	float prev_error {};
 #endif
 
+	constexpr uint32_t red = WS2812::RGB(255, 0, 0);
+	constexpr uint32_t green = WS2812::RGB(0, 255, 0);
+	
+	bool motor_is_working = false;
 	float target_speed {};
 	float motor_speed {};
 	auto prev_time = get_absolute_time();
@@ -253,12 +256,21 @@ void motor_task(void* param) {
 		if (xQueueReceive(motor_speed_queues[pos], &target_speed, 0) == pdTRUE) {
 			last_messeage_time = get_absolute_time();
 		}
+		// Read the current speed from the encoder.
 		const float current_rpm { static_cast<float>(encoder.getSpeed()) * encoder_speed_multiplier * 60 };
 
 		auto current_time = get_absolute_time();
 		if (absolute_time_diff_us(last_messeage_time, current_time) >= timeout_for_turnoff_ms * 1000) {
+			if (motor_is_working != false) {
+				motor_is_working = false;
+				xQueueOverwrite(led_strip_queue, &red);
+			}
 			motor_speed = 0;
 		} else {
+			if (motor_is_working != true) {
+				motor_is_working = true;
+				xQueueOverwrite(led_strip_queue, &green);
+			}
 #ifdef MOTOR_PID_CONTROL
 			const float error { target_speed - current_rpm };
 
@@ -277,8 +289,6 @@ void motor_task(void* param) {
 			motor_speed = target_speed;
 #endif
 		}
-
-		// Read the current speed from the encoder.
 
 		motor.setSpeedPercent(target_speed);
 
@@ -382,7 +392,7 @@ void micro_ros_task(void* param) {
 		"motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[3]);
 	vTaskCoreAffinitySet(motor_task_handle[3], ON_BOTH_CORES);
 
-	xTaskCreate(led_strip_task, "led_strip_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 3, &led_strip_task_handle);
+	xTaskCreate(led_strip_task, "led_strip_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &led_strip_task_handle);
 	vTaskCoreAffinitySet(led_strip_task_handle, ON_BOTH_CORES);
 
 	xTaskResumeAll();

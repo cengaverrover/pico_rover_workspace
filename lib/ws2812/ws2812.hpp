@@ -31,11 +31,11 @@ class WS2812 {
 
         ~WS2812();
 
-        static uint32_t RGB(uint8_t red, uint8_t green, uint8_t blue) {
+        static constexpr uint32_t RGB(uint8_t red, uint8_t green, uint8_t blue) {
             return (uint32_t)(blue) << 16 | (uint32_t)(green) << 8 | (uint32_t)(red);
         };
 
-        static uint32_t RGBW(uint8_t red, uint8_t green, uint8_t blue, uint8_t white) {
+        static constexpr uint32_t RGBW(uint8_t red, uint8_t green, uint8_t blue, uint8_t white) {
             return (uint32_t)(white) << 24 | (uint32_t)(blue) << 16 | (uint32_t)(green) << 8 | (uint32_t)(red);
         }
 
