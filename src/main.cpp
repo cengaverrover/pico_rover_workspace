@@ -207,11 +207,11 @@ void i2c_setup() {
 	// Create the i2c device tasks. They all need to run on the same core, 
 	// otherwise a mutex needs to be set to prevent 2 cores from accessing the same I2C line at the same time.
 	xTaskCreate(bno055_task, "bno055_task", configMINIMAL_STACK_SIZE * 4,
-		NULL, configMAX_PRIORITIES - 2, &bno055_task_handle);
+		NULL, configMAX_PRIORITIES - 3, &bno055_task_handle);
 	vTaskCoreAffinitySet(bno055_task_handle, ON_CORE_ZERO);
 
 	xTaskCreate(bme280_task, "bme280_task", configMINIMAL_STACK_SIZE * 4,
-		NULL, configMAX_PRIORITIES - 3, &bme280_task_handle);
+		NULL, configMAX_PRIORITIES - 4, &bme280_task_handle);
 	vTaskCoreAffinitySet(bme280_task_handle, ON_CORE_ZERO);
 
 }
@@ -373,22 +373,22 @@ void micro_ros_task(void* param) {
 	pio_add_program(pio0, &quadrature_encoder_substep_program);
 
 	xTaskCreate(motor_task<FRONT_LEFT_LPWM, FRONT_LEFT_RPWM, FRONT_LEFT_ENCODER_A, front_left>,
-		"motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[0]);
+		"motor_front_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[0]);
 	vTaskCoreAffinitySet(motor_task_handle[0], ON_BOTH_CORES);
 
 	xTaskCreate(motor_task<FRONT_RIGHT_LPWM, FRONT_RIGHT_RPWM, FRONT_RIGHT_ENCODER_A, front_right>,
-		"motor_front_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[1]);
+		"motor_front_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[1]);
 	vTaskCoreAffinitySet(motor_task_handle[1], ON_BOTH_CORES);
 
 	xTaskCreate(motor_task<BACK_LEFT_LPWM, BACK_RIGHT_RPWM, BACK_LEFT_ENCODER_A, back_left>,
-		"motor_back_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[2]);
+		"motor_back_left_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[2]);
 	vTaskCoreAffinitySet(motor_task_handle[2], ON_BOTH_CORES);
 
 	xTaskCreate(motor_task<BACK_RIGHT_LPWM, BACK_RIGHT_RPWM, BACK_RIGHT_ENCODER_A, back_right>,
-		"motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 1, &motor_task_handle[3]);
+		"motor_back_right_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 2, &motor_task_handle[3]);
 	vTaskCoreAffinitySet(motor_task_handle[3], ON_BOTH_CORES);
 
-	xTaskCreate(led_strip_task, "led_strip_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 3, &led_strip_task_handle);
+	xTaskCreate(led_strip_task, "led_strip_task", configMINIMAL_STACK_SIZE * 2, nullptr, configMAX_PRIORITIES - 4, &led_strip_task_handle);
 	vTaskCoreAffinitySet(led_strip_task_handle, ON_BOTH_CORES);
 
 	xTaskResumeAll();
@@ -434,7 +434,8 @@ int main() {
 	sleep_ms(100);
 
 	// Create the micro_ros task will create all the topics and other tasks.
-	xTaskCreate(micro_ros_task, "micro_ros_task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES, &micro_ros_task_handle);
+	xTaskCreate(micro_ros_task, "micro_ros_task", configMINIMAL_STACK_SIZE * 4,
+		NULL, configMAX_PRIORITIES - 1, &micro_ros_task_handle);
 	vTaskCoreAffinitySet(micro_ros_task_handle, ON_BOTH_CORES);
 
 	// Start the freeRTOS scheduler. The code should never reach the while loop.
