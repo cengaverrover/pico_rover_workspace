@@ -48,7 +48,6 @@ static std_msgs__msg__ColorRGBA led_strip_msg_received {};
 static rcl_publisher_t motor_publishers[4] {};
 static rcl_publisher_t imu_publisher {};
 
-static TaskHandle_t idle_led_task_handle {};
 static TaskHandle_t micro_ros_task_handle {};
 static TaskHandle_t motor_task_handle[4] {};
 static TaskHandle_t bno055_task_handle {};
@@ -70,6 +69,10 @@ enum MotorPos {
 };
 
 #define CLAMP(x, upper, lower) (MIN((upper), MAX((x), (lower))))
+
+bool motor_pid_callback(struct repeating_timer* t) {
+	
+}
 
 void movement_subscription_callback(const void* msgin) {
 	// Receive the cmd_vel messeage from the subscription and send it to the freeRTOS queue.
@@ -244,7 +247,7 @@ void motor_task(void* param) {
 
 	constexpr uint32_t red = WS2812::RGB(255, 0, 0);
 	constexpr uint32_t green = WS2812::RGB(0, 255, 0);
-	
+
 	bool motor_is_working = false;
 	float target_speed {};
 	float motor_speed {};
@@ -290,14 +293,14 @@ void motor_task(void* param) {
 #endif
 		}
 
-		motor.setSpeedPercent(target_speed);
+		motor.setSpeedPercent(motor_speed);
 
 		// Publish the current velocity as microROS messeage.
-		motor_msg.data = current_rpm;
+		motor_msg.data = motor_speed;
 		const auto ret = rcl_publish(&motor_publishers[pos], &motor_msg, NULL);
 
 		// Delay the task.
-		xTaskDelayUntil(&currentTickCount, 5 / portTICK_PERIOD_MS);
+		xTaskDelayUntil(&currentTickCount, 6 / portTICK_PERIOD_MS);
 	}
 	}
 
@@ -399,8 +402,8 @@ void micro_ros_task(void* param) {
 
 	// Checks the microRTOS data transfer.
 	while (true) {
-		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
-		vTaskDelay(10 / portTICK_PERIOD_MS);
+		rclc_executor_spin(&executor);
+		vTaskDelay(50 / portTICK_PERIOD_MS);
 	}
 }
 
@@ -444,7 +447,7 @@ int main() {
 	
 	// Create the micro_ros task will create all the topics and other tasks.
 	xTaskCreate(micro_ros_task, "micro_ros_task", configMINIMAL_STACK_SIZE * 4,
-		NULL, 1, &micro_ros_task_handle);
+		NULL, 5, &micro_ros_task_handle);
 	vTaskCoreAffinitySet(micro_ros_task_handle, ON_CORE_ONE);
 
 	// Start the freeRTOS scheduler. The code should never reach the while loop.
