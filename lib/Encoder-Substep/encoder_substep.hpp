@@ -16,6 +16,8 @@ public:
 
     int getSpeed();
 
+    int getRpm();
+
     int getSpeed_2_20();
 
     struct Data {

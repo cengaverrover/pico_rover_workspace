@@ -32,7 +32,7 @@ target_compile_definitions(${NAME} PRIVATE
 
 target_compile_definitions(${NAME} PRIVATE
     PWM_MAX_DUTY_CYCLE=80.0f
-    MOTOR_MAX_RPM=20000
+    MOTOR_MAX_RPM=16000
     ENCODER_PULSE_PER_REV=16
 
     LED_STRIP_SIZE=119

@@ -27,6 +27,11 @@ int EncoderSubstep::getSpeed() {
     return m_substepState.speed;
 }
 
+int EncoderSubstep::getRpm() {
+    substep_update(&m_substepState);
+    return (60 * m_substepState.speed);
+}
+
 int EncoderSubstep::getSpeed_2_20() {
     substep_update(&m_substepState);
     return m_substepState.speed_2_20;
