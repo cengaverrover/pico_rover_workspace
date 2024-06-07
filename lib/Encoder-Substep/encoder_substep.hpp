@@ -8,7 +8,7 @@ public:
     EncoderSubstep() = delete;
     EncoderSubstep(EncoderSubstep& encoder) = delete;
 
-    EncoderSubstep(const PIO pio, const uint sm, const uint pinA);
+    EncoderSubstep(const PIO pio, const uint sm, const uint pinA, const uint pulse_per_rev);
 
     bool calibrate();
 
@@ -30,6 +30,7 @@ public:
 
 private:
     const uint m_pinA {};
+    const uint m_pulsePerRev { 16 };
     substep_state_t m_substepState {};
 
 };

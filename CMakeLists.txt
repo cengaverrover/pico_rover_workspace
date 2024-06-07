@@ -25,12 +25,7 @@ add_compile_definitions(
 SET(MICRO_ROS_PATH "${CMAKE_CURRENT_LIST_DIR}/lib/micro_ros_raspberrypi_pico_sdk/" CACHE STRING "Course Common Lib")
 include(micro_ros.cmake)
 
-
-add_subdirectory(lib/pico_micro_ros_transport)
-add_subdirectory(lib/Encoder-Substep)
-add_subdirectory(lib/motor)
-add_subdirectory(lib/bno055_lib/lib)
-add_subdirectory(lib/ws2812)
+add_subdirectory(lib)
 
 #Add main source directory
 add_subdirectory(src)

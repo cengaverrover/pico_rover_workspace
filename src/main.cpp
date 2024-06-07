@@ -29,7 +29,7 @@ extern "C" {
 #include <std_msgs/msg/color_rgba.h>
 #include <geometry_msgs/msg/twist.h>
 #include <geometry_msgs/msg/vector3.h>
-#include "pico_uart_transports.h"
+#include "pico_usb_transports.h"
 
 #include "bno055.h"
 }
@@ -87,7 +87,7 @@ template <uint pwmPinL, uint pwmPinR, uint encA, MotorPos pos>
 bool motor_pid_cb(repeating_timer* t) {
 	// All 
 	static Motor motor(pwmPinL, pwmPinR);
-	static EncoderSubstep encoder(pio0, pos, encA);
+	static EncoderSubstep encoder(pio0, pos, encA, ENCODER_PULSE_PER_REV);
 	static float integral { 0 };
 	static int32_t prev_error { 0 };
 	static int64_t alarm_count { 0 };
@@ -339,15 +339,6 @@ void micro_ros_task(void* param) {
 		"led_strip_rgba"
 	);
 
-	// rcl_timer_t timer;
-	// constexpr unsigned int timer_timeout = 1000;
-	// rclc_timer_init_default(
-	// 	&timer,
-	// 	&support,
-	// 	RCL_MS_TO_NS(timer_timeout),
-	// 	timer_callback
-	// );
-
 	// Create the executor struct that will handle the actual microROS execution.
 	rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
 	rclc_executor_init(&executor, &support.context, 7, &allocator);
@@ -394,11 +385,16 @@ void micro_ros_task(void* param) {
 	// Checks the microRTOS data transfer.
 	while (true) {
 		rclc_executor_spin(&executor);
-		vTaskDelay(50 / portTICK_PERIOD_MS);
+		vTaskDelay(pdMS_TO_TICKS(50));
 	}
 }
 
 int main() {
+
+	stdio_init_all();
+	sleep_ms(100);
+
+	stdio_filter_driver(&stdio_uart);
 
 	led_strip_g.fill(WS2812::RGB(255, 0, 0));
 	led_strip_g.show();
@@ -410,17 +406,17 @@ int main() {
 	rmw_uros_set_custom_transport(
 		true,
 		NULL,
-		pico_serial_transport_open,
-		pico_serial_transport_close,
-		pico_serial_transport_write,
-		pico_serial_transport_read
+		pico_usb_transport_open,
+		pico_usb_transport_close,
+		pico_usb_transport_write,
+		pico_usb_transport_read
 	);
 
 	gpio_init(PICO_DEFAULT_LED_PIN);
 	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-	constexpr const int timeout_ms = 1000;
-	constexpr const uint8_t attempts = 120;
+	constexpr int timeout_ms = 1000;
+	constexpr uint8_t attempts = 120;
 	// Try to connect to ROS2 until success.
 	while (rmw_uros_ping_agent(timeout_ms, attempts) != RCL_RET_OK)
 	{

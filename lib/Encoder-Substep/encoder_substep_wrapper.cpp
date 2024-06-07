@@ -1,6 +1,6 @@
 #include "encoder_substep.hpp"
 
-EncoderSubstep::EncoderSubstep(const PIO pio, const uint sm, const uint pinA) : m_pinA(pinA) {
+EncoderSubstep::EncoderSubstep(const PIO pio, const uint sm, const uint pinA, const uint pulse_per_rev) : m_pinA(pinA), m_pulsePerRev(pulse_per_rev) {
     substep_init_state(pio, sm, m_pinA, &m_substepState);
     substep_set_calibration_data(&m_substepState, 64, 128, 192);
 }
@@ -29,7 +29,7 @@ int EncoderSubstep::getSpeed() {
 
 int EncoderSubstep::getRpm() {
     substep_update(&m_substepState);
-    return (60 * m_substepState.speed);
+    return ( m_substepState.speed * (4 * 60) / m_pulsePerRev );
 }
 
 int EncoderSubstep::getSpeed_2_20() {
